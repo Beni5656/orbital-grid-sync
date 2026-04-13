@@ -73,3 +73,33 @@ def tile_geotiff(src_path: str, output_dir: str, tile_size: int=512, overlap: in
         
         print(f"Tiled {len(manifest)} valid patches from {Path(src_path).name}")
         return manifest
+
+class PercentileNormalizer:
+    """
+    Used to normalize images, pixel values less than 2nd percentile and 98th percentile and treated as the min and max
+    """
+    def init(self, p_low: float=2, p_high: float=98):
+        self.p_low = p_low
+        self.p_high = p_high
+        self.lo = None
+        self.hi = None
+    
+    def fit(self, tiles: np.ndarray) -> "PercentileNormalizer":
+        flat = tiles.reshape(tiles.shape[1], -1)
+        self.lo = np.percentile(flat, self.p_low, axis=1)
+        self.hi = np.percentile(flat, self.p_high, axis=1)
+        return self
+    
+    def save(self, path: str):
+        np.savez(path, lo=self.lo, hi=self.hi)
+
+    def load(self, path: str) -> "PercentileNormalizer":
+        data = np.load(path)
+        self.lo, self.hi = data['lo'], data['hi']
+        return self
+    
+    def __call__(self, tile: np.ndarray) -> np.ndarray:
+        """tile: (C, H, W) → [0, 1] float32"""
+        lo = self.lo[:, None, None]
+        hi = self.hi[:, None, None]
+        return np.clip((tile - lo) / (hi - lo + 1e-8), 0.0, 1.0)    
