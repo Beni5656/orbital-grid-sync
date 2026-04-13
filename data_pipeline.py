@@ -103,3 +103,27 @@ class PercentileNormalizer:
         lo = self.lo[:, None, None]
         hi = self.hi[:, None, None]
         return np.clip((tile - lo) / (hi - lo + 1e-8), 0.0, 1.0)    
+    
+def get_train_transforms(tile_size: int = 512) -> A.Compose:
+    """
+    Applies Randomness to Each Image
+    """
+    return A.Compose([
+        A.RandomRotate90(p=0.5),
+        A.VerticalFlip(p=0.5),
+        A.HorizontalFlip(p=0.5),
+        A.RandomCrop(tile_size, tile_size),
+        A.OneOf([
+            A.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.1, hue=0.05, p=1.0),
+            A.RandomBrightnessContrast(p=1.0),
+        ], p=0.5),
+    ], additional_targets={"image2": "image"})
+
+
+def get_val_transforms(tile_size: int = 512) -> A.Compose:
+    """
+    Always crops in the center spot 
+    """
+    return A.Compose([
+        A.CenterCrop(tile_size, tile_size),
+    ], additional_targets={"image2": "image"})
