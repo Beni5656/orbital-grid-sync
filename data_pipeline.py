@@ -127,3 +127,81 @@ def get_val_transforms(tile_size: int = 512) -> A.Compose:
     return A.Compose([
         A.CenterCrop(tile_size, tile_size),
     ], additional_targets={"image2": "image"})
+
+class ChangeDetectionDataset(Dataset):
+    """
+    Pytorch Dataset for multi-temporal change detection
+    """
+
+    def __init__(
+        self,
+        root: str,
+        split: str = "train",
+        tile_size: int = 512,
+        normalizer: PercentileNormalizer = None,
+    ):
+        self.root = Path(root)
+        self.tile_size = tile_size
+        self.normalizer = normalizer
+
+        self.t1_files   = sorted((self.root / "t1").glob("*.npy"))
+        self.t2_files   = sorted((self.root / "t2").glob("*.npy"))
+        self.mask_files = sorted((self.root / "masks").glob("*.npy"))
+
+        assert len(self.t1_files) == len(self.t2_files) == len(self.mask_files), \
+            "Mismatch between T1, T2, and mask file counts."
+
+        self.transforms = (
+            get_train_transforms(tile_size) if split == "train"
+            else get_val_transforms(tile_size)
+        )
+
+    def __len__(self):
+        return len(self.t1_files)
+
+    def __getitem__(self, idx):
+        t1   = np.load(self.t1_files[idx])    
+        t2   = np.load(self.t2_files[idx])
+        mask = np.load(self.mask_files[idx])   
+
+        if self.normalizer:
+            t1 = self.normalizer(t1)
+            t2 = self.normalizer(t2)
+
+        result = self.transforms(
+            image=t1.transpose(1, 2, 0),
+            image2=t2.transpose(1, 2, 0),
+            mask=mask,
+        )
+
+        return {
+            "t1":     torch.from_numpy(result["image"].transpose(2, 0, 1)),
+            "t2":     torch.from_numpy(result["image2"].transpose(2, 0, 1)),
+            "mask":   torch.from_numpy(result["mask"]).long(),
+            "t1_path": str(self.t1_files[idx]),
+        }
+
+def mask_to_geojson(mask: np.ndarray, src_path: str, output_path: str, threshold: float = 0.5, min_area_m2: float = 100.0):
+    """
+    Converts a predicted probability mask into a georeferenced GeoJSON file
+    """
+    try:
+        import geopandas as gpd
+        from shapely.geometry import shape
+    except ImportError:
+        raise ImportError("pip install geopandas shapely")
+
+    binary = (mask > threshold).astype(np.uint8)
+
+    with rasterio.open(src_path) as src:
+        shapes_gen = rasterio.features.shapes(binary, transform=src.transform)
+        geometries = [
+            {"geometry": shape(geom), "probability": float(val)}
+            for geom, val in shapes_gen if val == 1
+        ]
+        crs = src.crs
+
+    gdf = gpd.GeoDataFrame(geometries, crs=crs)
+    gdf = gdf[gdf.geometry.area > min_area_m2 * 1e-10]  
+    gdf.to_file(output_path, driver="GeoJSON")
+    print(f"Saved {len(gdf)} change polygons → {output_path}")
